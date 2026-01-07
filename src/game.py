@@ -378,7 +378,7 @@ def run() -> None:
         keys = pygame.key.get_pressed()
         if not upgrade_open:
             # movement: WASD / arrows или сенсорный джойстик
-            if is_mobile and touch_controls["move_stick"]["active"]:
+            if is_mobile and touch_controls["move_stick"] and touch_controls["move_stick"]["active"]:
                 dx, dy = touch_controls["move_stick"]["offset"]
             else:
                 dx = float(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - float(
