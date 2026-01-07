@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import math
+import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pygame
 
@@ -38,7 +40,7 @@ class Drone:
     x: float
     y: float
     heading: float = 0.0  # radians
-    stats: DroneStats = DroneStats()
+    stats: DroneStats = field(default_factory=DroneStats)
     reload_left: float = 0.0
 
     def can_drop(self) -> bool:
@@ -179,8 +181,12 @@ def run() -> None:
             drone.stats.bomb_radius = min(110.0, drone.stats.bomb_radius + 6.0)
 
     running = True
+    elapsed = 0.0
+    frames = 0
     while running:
         dt = clock.tick(120) / 1000.0
+        elapsed += dt
+        frames += 1
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -391,6 +397,97 @@ def run() -> None:
     pygame.quit()
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="BomberFPV — top-down FPV bomber prototype")
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run a short headless smoke test (auto-exit).",
+    )
+    p.add_argument(
+        "--seconds",
+        type=float,
+        default=0.75,
+        help="Smoke test duration in seconds (only with --smoke).",
+    )
+    p.add_argument(
+        "--frames",
+        type=int,
+        default=0,
+        help="Smoke test max frames (0 = ignore, only with --smoke).",
+    )
+    return p.parse_args(argv)
+
+
+def smoke(seconds: float = 0.75, frames: int = 0) -> None:
+    # Run the main loop shortly with a dummy video driver to validate init/draw/update.
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+
+    pygame.init()
+    pygame.display.set_caption("BomberFPV — smoke")
+
+    w, h = 640, 360
+    sidebar_w = 220
+    play = pygame.Rect(0, 0, w - sidebar_w, h)
+    screen = pygame.display.set_mode((w, h))
+    clock = pygame.time.Clock()
+    font = pygame.font.SysFont("DejaVu Sans", 18)
+
+    drone = Drone(x=play.centerx, y=play.centery)
+    targets: list[Target] = [spawn_target(play) for _ in range(5)]
+    bombs: list[Bomb] = []
+
+    t = 0.0
+    f = 0
+    while t < max(0.01, seconds) and (frames <= 0 or f < frames):
+        dt = clock.tick(120) / 1000.0
+        t += dt
+        f += 1
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                return
+
+        # simple autopilot circle + periodic drops
+        ang = t * 1.2
+        drone.x = clamp(play.centerx + math.cos(ang) * 120, play.left + 10, play.right - 10)
+        drone.y = clamp(play.centery + math.sin(ang) * 80, play.top + 10, play.bottom - 10)
+        drone.heading = ang
+        drone.tick_reload(dt)
+        if (int(t * 10) % 6 == 0) and drone.can_drop():
+            bombs.append(
+                Bomb(
+                    x=drone.x,
+                    y=drone.y,
+                    t_left=drone.stats.bomb_fall_time,
+                    radius=drone.stats.bomb_radius,
+                )
+            )
+            drone.start_reload()
+
+        for tr in targets:
+            tr.update(dt, play)
+        for b in bombs:
+            b.update(dt)
+        bombs = [b for b in bombs if not b.impacted()]
+
+        screen.fill(BLACK)
+        pygame.draw.rect(screen, DARK, play)
+        for tr in targets:
+            pygame.draw.circle(screen, tr.color, (int(tr.x), int(tr.y)), int(tr.r))
+        for b in bombs:
+            pygame.draw.circle(screen, WHITE, (int(b.x), int(b.y)), 10, 2)
+        pygame.draw.circle(screen, WHITE, (int(drone.x), int(drone.y)), 8)
+        screen.blit(font.render("smoke test…", True, WHITE), (play.left + 8, play.top + 8))
+        pygame.display.flip()
+
+    pygame.quit()
+
+
 if __name__ == "__main__":
-    run()
+    args = parse_args()
+    if args.smoke:
+        smoke(seconds=args.seconds, frames=args.frames)
+    else:
+        run()
 
