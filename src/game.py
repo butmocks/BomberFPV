@@ -415,9 +415,10 @@ def run() -> None:
         # resolve impacts
         if impacted:
             removed: set[int] = set()
-            hits_count = 0
+            max_hits_per_bomb = 0  # Максимальное количество попаданий одной бомбой
             for b in impacted:
                 sound_manager.play("explosion")
+                bomb_hits = 0  # Счетчик попаданий для этой конкретной бомбы
                 # score for targets in radius (single bomb can hit multiple)
                 for i, t in enumerate(targets):
                     if i in removed:
@@ -425,15 +426,18 @@ def run() -> None:
                     if dist((b.x, b.y), (t.x, t.y)) <= (b.radius + t.r):
                         score += t.points
                         removed.add(i)
-                        hits_count += 1
+                        bomb_hits += 1
                         sound_manager.play("hit")
+                # Отслеживаем максимальное количество попаданий одной бомбой
+                max_hits_per_bomb = max(max_hits_per_bomb, bomb_hits)
 
             if removed:
                 targets = [t for i, t in enumerate(targets) if i not in removed]
                 # Черный юмор при попадании
-                if hits_count > 1:
+                # Комбо только если одна бомба попала в несколько целей
+                if max_hits_per_bomb > 1:
                     humor_message = random.choice(HUMOR_PHRASES["combo"])
-                else:
+                elif max_hits_per_bomb == 1:
                     humor_message = random.choice(HUMOR_PHRASES["hit"])
                 humor_timer = 2.0
 
