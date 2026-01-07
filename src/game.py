@@ -4,9 +4,16 @@ import argparse
 import math
 import os
 import random
+import sys
 from dataclasses import dataclass, field
 
 import pygame
+
+# Импорт системы звуков
+try:
+    from .sounds import SoundManager
+except ImportError:
+    from sounds import SoundManager
 
 
 WHITE = (240, 240, 240)
@@ -25,6 +32,37 @@ SCORE_TABLE: list[tuple[str, int, tuple[int, int, int]]] = [
     ("Боеприпасы", 50, CYAN),
     ("Техника", 100, RED),
 ]
+
+# Черный юмор - украинские фразы
+HUMOR_PHRASES = {
+    "start": [
+        "Добро пожаловать на фронт, пілот!",
+        "Сьогодні твоя черга стати героєм... або статистикою.",
+        "Пам'ятай: кожна бомба має свій адрес.",
+    ],
+    "hit": [
+        "Бабах! Ще один влучний удар!",
+        "Попав! Ворог тепер в кращому світі... або просто в іншому.",
+        "В ціль! Це було красиво, як смерть.",
+        "Ще один! Колекція трофеїв росте.",
+        "Гарно! Вони більше не будуть скаржитися.",
+    ],
+    "miss": [
+        "Майже... Спробуй ще раз, може пощастить.",
+        "Трохи не влучив. Наступного разу буде краще... або гірше.",
+        "Спробуй ще. Практика робить майстра... або труп.",
+    ],
+    "upgrade": [
+        "Апгрейд куплено! Тепер ти смертельніший.",
+        "Покращення активовано! Вороги в жаху... якщо вони ще живі.",
+        "Нова зброя! Тепер ти можеш вбивати ефективніше.",
+    ],
+    "combo": [
+        "Комбо! Вони падають як мухи!",
+        "Влучний удар! Колекція трупів росте!",
+        "Мультикілл! Ти майстер знищення!",
+    ],
+}
 
 
 @dataclass
@@ -138,13 +176,32 @@ def draw_text(
 
 def run() -> None:
     pygame.init()
-    pygame.display.set_caption("BomberFPV — prototype")
-
-    w, h = 1100, 700
-    screen = pygame.display.set_mode((w, h))
+    pygame.display.set_caption("BomberFPV — Український варіант")
+    
+    # Определение мобильного устройства
+    is_mobile = hasattr(pygame, "ANDROID") or os.environ.get("ANDROID_ROOT")
+    
+    # Адаптивный размер экрана для мобильных
+    if is_mobile:
+        info = pygame.display.Info()
+        w, h = info.current_w, info.current_h
+        if w > h:
+            w, h = h, w  # портретная ориентация
+    else:
+        w, h = 1100, 700
+    
+    screen = pygame.display.set_mode((w, h), pygame.RESIZABLE if not is_mobile else 0)
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("DejaVu Sans", 18)
     font_big = pygame.font.SysFont("DejaVu Sans", 24, bold=True)
+    font_humor = pygame.font.SysFont("DejaVu Sans", 16, italic=True)
+    
+    # Инициализация звуков
+    sound_manager = SoundManager(enabled=True)
+    
+    # Сообщения для отображения
+    humor_message = ""
+    humor_timer = 0.0
 
     # playfield + sidebar
     sidebar_w = 320
@@ -157,6 +214,37 @@ def run() -> None:
 
     score = 0
     upgrade_open = False
+    
+    # Мобильные элементы управления
+    touch_controls = {
+        "move_stick": None,  # виртуальный джойстик для движения
+        "bomb_button": None,  # кнопка сброса бомбы
+        "upgrade_button": None,  # кнопка апгрейдов
+    }
+    
+    # Инициализация виртуальных кнопок для мобильных
+    if is_mobile:
+        stick_radius = min(w, h) * 0.12
+        touch_controls["move_stick"] = {
+            "center": (stick_radius + 20, h - stick_radius - 20),
+            "radius": stick_radius,
+            "active": False,
+            "offset": (0, 0),
+        }
+        button_size = min(w, h) * 0.08
+        touch_controls["bomb_button"] = {
+            "rect": pygame.Rect(w - button_size - 20, h - button_size - 20, button_size, button_size),
+            "pressed": False,
+        }
+        touch_controls["upgrade_button"] = {
+            "rect": pygame.Rect(w - button_size - 20, 20, button_size, button_size),
+            "pressed": False,
+        }
+    
+    # Показываем приветственное сообщение
+    humor_message = random.choice(HUMOR_PHRASES["start"])
+    humor_timer = 3.0
+    sound_manager.play("drone")
 
     # upgrades (cost grows)
     up_levels = {"speed": 0, "reload": 0, "radius": 0}
@@ -165,11 +253,11 @@ def run() -> None:
         base = {"speed": 120, "reload": 140, "radius": 160}[stat]
         return base + up_levels[stat] * base
 
-    def apply_upgrade(stat: str) -> None:
+    def apply_upgrade(stat: str) -> bool:
         nonlocal score
         c = upgrade_cost(stat)
         if score < c:
-            return
+            return False
         score -= c
         up_levels[stat] += 1
 
@@ -179,6 +267,7 @@ def run() -> None:
             drone.stats.reload_time = max(0.25, drone.stats.reload_time - 0.12)
         elif stat == "radius":
             drone.stats.bomb_radius = min(110.0, drone.stats.bomb_radius + 6.0)
+        return True
 
     running = True
     elapsed = 0.0
@@ -201,11 +290,20 @@ def run() -> None:
                     upgrade_open = not upgrade_open
                 elif upgrade_open:
                     if e.key == pygame.K_1:
-                        apply_upgrade("speed")
+                        if apply_upgrade("speed"):
+                            sound_manager.play("upgrade")
+                            humor_message = random.choice(HUMOR_PHRASES["upgrade"])
+                            humor_timer = 2.0
                     elif e.key == pygame.K_2:
-                        apply_upgrade("reload")
+                        if apply_upgrade("reload"):
+                            sound_manager.play("upgrade")
+                            humor_message = random.choice(HUMOR_PHRASES["upgrade"])
+                            humor_timer = 2.0
                     elif e.key == pygame.K_3:
-                        apply_upgrade("radius")
+                        if apply_upgrade("radius"):
+                            sound_manager.play("upgrade")
+                            humor_message = random.choice(HUMOR_PHRASES["upgrade"])
+                            humor_timer = 2.0
                 else:
                     if e.key == pygame.K_SPACE and drone.can_drop():
                         bombs.append(
@@ -217,16 +315,78 @@ def run() -> None:
                             )
                         )
                         drone.start_reload()
+                        sound_manager.play("drop")
+            # Мобильные сенсорные события
+            elif is_mobile:
+                if e.type == pygame.MOUSEBUTTONDOWN:
+                    pos = e.pos
+                    # Проверка кнопки бомбы
+                    if touch_controls["bomb_button"] and touch_controls["bomb_button"]["rect"].collidepoint(pos):
+                        touch_controls["bomb_button"]["pressed"] = True
+                        if drone.can_drop():
+                            bombs.append(
+                                Bomb(
+                                    x=drone.x,
+                                    y=drone.y,
+                                    t_left=drone.stats.bomb_fall_time,
+                                    radius=drone.stats.bomb_radius,
+                                )
+                            )
+                            drone.start_reload()
+                            sound_manager.play("drop")
+                    # Проверка кнопки апгрейдов
+                    elif touch_controls["upgrade_button"] and touch_controls["upgrade_button"]["rect"].collidepoint(pos):
+                        touch_controls["upgrade_button"]["pressed"] = True
+                        upgrade_open = not upgrade_open
+                    # Проверка джойстика движения
+                    elif touch_controls["move_stick"]:
+                        stick = touch_controls["move_stick"]
+                        dist_to_center = math.hypot(
+                            pos[0] - stick["center"][0], pos[1] - stick["center"][1]
+                        )
+                        if dist_to_center <= stick["radius"] * 1.5:
+                            stick["active"] = True
+                            dx = pos[0] - stick["center"][0]
+                            dy = pos[1] - stick["center"][1]
+                            mag = math.hypot(dx, dy)
+                            if mag > 0:
+                                stick["offset"] = (dx / mag, dy / mag)
+                            else:
+                                stick["offset"] = (0, 0)
+                elif e.type == pygame.MOUSEMOTION:
+                    if touch_controls["move_stick"] and touch_controls["move_stick"]["active"]:
+                        pos = e.pos
+                        stick = touch_controls["move_stick"]
+                        dx = pos[0] - stick["center"][0]
+                        dy = pos[1] - stick["center"][1]
+                        mag = math.hypot(dx, dy)
+                        max_mag = stick["radius"]
+                        if mag > max_mag:
+                            dx = dx / mag * max_mag
+                            dy = dy / mag * max_mag
+                        if mag > 0:
+                            stick["offset"] = (dx / max_mag, dy / max_mag)
+                elif e.type == pygame.MOUSEBUTTONUP:
+                    if touch_controls["move_stick"]:
+                        touch_controls["move_stick"]["active"] = False
+                        touch_controls["move_stick"]["offset"] = (0, 0)
+                    if touch_controls["bomb_button"]:
+                        touch_controls["bomb_button"]["pressed"] = False
+                    if touch_controls["upgrade_button"]:
+                        touch_controls["upgrade_button"]["pressed"] = False
 
         keys = pygame.key.get_pressed()
         if not upgrade_open:
-            # movement: WASD / arrows
-            dx = float(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - float(
-                keys[pygame.K_a] or keys[pygame.K_LEFT]
-            )
-            dy = float(keys[pygame.K_s] or keys[pygame.K_DOWN]) - float(
-                keys[pygame.K_w] or keys[pygame.K_UP]
-            )
+            # movement: WASD / arrows или сенсорный джойстик
+            if is_mobile and touch_controls["move_stick"]["active"]:
+                dx, dy = touch_controls["move_stick"]["offset"]
+            else:
+                dx = float(keys[pygame.K_d] or keys[pygame.K_RIGHT]) - float(
+                    keys[pygame.K_a] or keys[pygame.K_LEFT]
+                )
+                dy = float(keys[pygame.K_s] or keys[pygame.K_DOWN]) - float(
+                    keys[pygame.K_w] or keys[pygame.K_UP]
+                )
 
             if dx != 0.0 or dy != 0.0:
                 mag = math.hypot(dx, dy)
@@ -255,7 +415,9 @@ def run() -> None:
         # resolve impacts
         if impacted:
             removed: set[int] = set()
+            hits_count = 0
             for b in impacted:
+                sound_manager.play("explosion")
                 # score for targets in radius (single bomb can hit multiple)
                 for i, t in enumerate(targets):
                     if i in removed:
@@ -263,13 +425,25 @@ def run() -> None:
                     if dist((b.x, b.y), (t.x, t.y)) <= (b.radius + t.r):
                         score += t.points
                         removed.add(i)
+                        hits_count += 1
+                        sound_manager.play("hit")
 
             if removed:
                 targets = [t for i, t in enumerate(targets) if i not in removed]
+                # Черный юмор при попадании
+                if hits_count > 1:
+                    humor_message = random.choice(HUMOR_PHRASES["combo"])
+                else:
+                    humor_message = random.choice(HUMOR_PHRASES["hit"])
+                humor_timer = 2.0
 
             # keep population
             while len(targets) < 10:
                 targets.append(spawn_target(play))
+        
+        # Обновление таймера сообщений
+        if humor_timer > 0:
+            humor_timer -= dt
 
         # draw
         screen.fill(BLACK)
@@ -315,8 +489,10 @@ def run() -> None:
         # sidebar UI
         x0 = sidebar.left + 16
         y = 16
-        draw_text(screen, "BomberFPV (prototype)", (x0, y), font_big, WHITE)
-        y += 36
+        draw_text(screen, "BomberFPV", (x0, y), font_big, WHITE)
+        y += 28
+        draw_text(screen, "🇺🇦 Український варіант", (x0, y), font, YELLOW)
+        y += 30
 
         draw_text(screen, f"Очки: {score}", (x0, y), font_big, WHITE)
         y += 34
@@ -349,6 +525,16 @@ def run() -> None:
         draw_text(screen, "U — апгрейды", (x0, y), font, WHITE)
         y += 22
         draw_text(screen, "Esc — выход/закрыть меню", (x0, y), font, WHITE)
+        
+        # Отображение сообщений с черным юмором
+        if humor_timer > 0 and humor_message:
+            msg_surf = font_humor.render(humor_message, True, CYAN)
+            msg_rect = msg_surf.get_rect(center=(play.centerx, play.top + 40))
+            # Полупрозрачный фон
+            bg = pygame.Surface((msg_rect.width + 20, msg_rect.height + 10), pygame.SRCALPHA)
+            bg.fill((0, 0, 0, 180))
+            screen.blit(bg, (msg_rect.x - 10, msg_rect.y - 5))
+            screen.blit(msg_surf, msg_rect)
 
         if upgrade_open:
             overlay = pygame.Surface((play.width, play.height), pygame.SRCALPHA)
@@ -386,11 +572,59 @@ def run() -> None:
             ty += 10
             draw_text(
                 screen,
-                "Заметка: боеприпас 'падает' ~0.55s — нужно сбрасывать чуть заранее.",
+                "Заметка: боеприпас 'падает' ~0.55s — треба скидати трохи завчасно.",
                 (bx + 20, ty),
                 font,
                 (200, 200, 200),
             )
+            ty += 24
+            draw_text(
+                screen,
+                "Пам'ятай: кожна бомба має свій адрес!",
+                (bx + 20, ty),
+                font_humor,
+                (180, 180, 255),
+            )
+        
+        # Отрисовка мобильных элементов управления
+        if is_mobile:
+            # Виртуальный джойстик
+            if touch_controls["move_stick"]:
+                stick = touch_controls["move_stick"]
+                center = stick["center"]
+                radius = stick["radius"]
+                # Фон джойстика
+                pygame.draw.circle(screen, (40, 40, 40, 200), center, radius)
+                pygame.draw.circle(screen, GRAY, center, radius, 2)
+                # Ручка джойстика
+                if stick["active"]:
+                    handle_pos = (
+                        int(center[0] + stick["offset"][0] * radius * 0.7),
+                        int(center[1] + stick["offset"][1] * radius * 0.7),
+                    )
+                else:
+                    handle_pos = center
+                pygame.draw.circle(screen, WHITE, handle_pos, int(radius * 0.3))
+            
+            # Кнопка бомбы
+            if touch_controls["bomb_button"]:
+                btn = touch_controls["bomb_button"]
+                color = RED if btn["pressed"] else (RED[0] // 2, RED[1] // 2, RED[2] // 2)
+                pygame.draw.rect(screen, color, btn["rect"], border_radius=8)
+                pygame.draw.rect(screen, WHITE, btn["rect"], 2, border_radius=8)
+                text = font.render("💣", True, WHITE)
+                text_rect = text.get_rect(center=btn["rect"].center)
+                screen.blit(text, text_rect)
+            
+            # Кнопка апгрейдов
+            if touch_controls["upgrade_button"]:
+                btn = touch_controls["upgrade_button"]
+                color = YELLOW if btn["pressed"] else (YELLOW[0] // 2, YELLOW[1] // 2, YELLOW[2] // 2)
+                pygame.draw.rect(screen, color, btn["rect"], border_radius=8)
+                pygame.draw.rect(screen, WHITE, btn["rect"], 2, border_radius=8)
+                text = font.render("⚙", True, WHITE)
+                text_rect = text.get_rect(center=btn["rect"].center)
+                screen.blit(text, text_rect)
 
         pygame.display.flip()
 
